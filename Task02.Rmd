@@ -1,0 +1,587 @@
+---
+title: "SCEM Final Coursework"
+subtitle: "Task II"
+author: "Sanya Kapoor (2696783)"
+output: pdf_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+*****
+
+## IMPORTANT NOTES: 
+- **DO NOT** change the code block names. Enter your solutions to each question into the predefined code blocks. 
+- **Don't forget to replace the placeholder value in code block "Setup" by your valid student ID number.**
+- If you want to use any packages, add their names to the vector `required.packages` in the code block "Setup". That code block will 
+automatically install those packages (if needed) and load them. Any other calls to `install.packages()`, `library()` or `require()` may result in zero marks for the activity where it happens.
+- Make sure that the data files *df.rds* and *df_holdout.rds* are located in the same folder as this file, _Task02.Rmd_.
+- Instructions for this task are provided in blue text below. Your solution should NOT be added within those text boxes, and should NOT be in blue text. **During marking, all the text within the text blocks below, with names starting with "prompt", will be removed and not visible to the marker.**
+
+```{r ID, echo=FALSE, message=FALSE, warning=FALSE}
+## We will use your student ID as the seed for the random number generator.
+MY_STUDENT_ID <-  2696783 # <-- Replace "ABCDEFG" by your student ID number (as an integer, i.e., without quotes).
+```
+
+```{r Setup, echo=FALSE, message=FALSE, warning=FALSE}
+force_reinstall_everything <- FALSE ## <--- change to TRUE to force a reinstall of 
+                                    ## all packages listed in allowed.packages
+
+## ADD ANY REQUIRED PACKAGES TO THE VECTOR BELOW
+## Note: tidyverse includes:  ggplot2, dplyr, tidyr, readr, purrr, tibble, 
+##                            stringr, forcats, and lubridate.
+allowed.packages <- c("tidyverse", 
+                      "tidymodels", 
+                      "recipes", 
+                      "parsnip", 
+                      "bonsai", 
+                      "healthyR.ai", 
+                      "knitr",
+                      "themis")
+
+
+## DO NOT CHANGE ANYTHING ELSE IN THIS CODE BLOCK
+for (i in seq_along(allowed.packages)){
+  if(!(allowed.packages[i] %in% installed.packages()[, 1]) || force_reinstall_everything){
+    install.packages(allowed.packages[i], 
+                     dependencies = c("Depends", "Imports"),
+                     repos = "https://cloud.r-project.org")
+  }
+  library(allowed.packages[i], character.only = TRUE)
+}
+
+knitr::opts_chunk$set(echo = TRUE, collapse=TRUE)
+ignore <- runif(1) # To initialise the PRNG
+
+cat("\nList of allowed packages (pre-loaded):\n ", paste(allowed.packages, collapse="\n  "))
+```
+
+```{r checkID, echo=FALSE}
+if(!is.numeric(2696783)){
+  stop("MY_STUDENT_ID MUST BE YOUR VALID NUMERIC ID.")
+} 
+```
+
+*****
+
+:::{#prompt .message style="color: blue;"}
+In this task you will build a full predictive pipeline for the problem described in the coursework specs. Please read each activity carefully and follow the instructions to complete your coursework.
+
+Make sure that the data file **df.rds** is placed in the same folder as this Task02.Rmd file. The data that you can use for model development in this task will then be automatically loaded and set up for you, and stored into a dataframe variable called `df`.
+:::
+
+
+```{r load_data, echo = FALSE}
+## DO NOT CHANGE ANYTHING IN THIS CODE BLOCK
+set.seed(MY_STUDENT_ID)
+df <- readRDS("df.rds") %>% sample_frac(0.6, replace = FALSE)
+```
+
+*****
+
+## 1. Exploratory Data Analysis
+:::{#prompt .message style="color: blue;"}
+**Note**: It is expected that this section should result in no more than 600-ish words (possibly less; not counting the code blocks).
+
+Add here your exploratory data analysis. Your solution should include both your code (which markers must be able to run independently) and your rationale for each exploratory step. In general, your EDA steps should include:
+
+- A short justification of what a given plot or statistical summary is intended to reveal about the data.
+
+- A code block implementing your EDA step.
+
+At the end of your EDA section, you should also include a short commentary on what your data exploration revealed about the data, and which pre-processing steps may be required based on that.
+
+You can use as many code blocks as needed, but don't overdo it (remember - everything needs to have a proper rationale). 
+
+
+STEP 1: INSPECTING THE DATASET
+We inspect the structure of data set and ensuring that it is loaded correctly & identify the variable types and quality of data.
+```{r}
+df = readRDS("df.rds") #Reading the file df.rds
+
+#Checking the no of observations,no of variables, variable types and the type of
+#class variable using glimpe()
+glimpse(df)
+
+#Class is detected as <dbl> which is numeric but it represents categories,so it
+#must be converted to factor for correct interpretation and modeling
+df = df %>% 
+  mutate(Class = factor(Class))
+
+count(df,Class) #Checking class balance after coversion
+
+#Plotting Class Distribution
+ggplot(df, aes(Class)) + geom_bar(fill = "grey") + theme_minimal() +
+  labs(title = "Class Distribution", x = "Class Label", y = "Count")
+```
+glimpse(df) shows that the data set contains 12338 observations and 390 variables, which indicates that it is a high dimensional data set. There are many (dbl) numbers and only a few other integers and characters ( Info_) variables. The target variable Class was numeric but since it is categorical, it was converted to a factor. The count of the classes indicates that there is a slight imbalance in the two classes (class -1 has 7,327 and class 1 has 5,011 observations). The plot visualizes the class imbalance, which is important because it helps for model training and evaluation.
+
+
+
+
+
+STEP2: IDENTIFYTING MISSING VALUES
+Identifying missing values is essential because they can affect model performance and may require removal during modelling and also to check whether missing data have some specific patterns which may indicate data issues or dependencies.
+
+```{r} 
+colSums(is.na(df)) #Check missing values for each variable 
+
+sum(colSums(is.na(df)) > 0) #Finding no of variables with missing values
+
+df %>%
+  mutate(missing_per_row = rowSums(is.na(.))) %>%
+  count(missing_per_row) #checking missing values per row
+
+mean(is.na(df)) * 100 #percentage of overall missing values
+```
+Missing value analysis shows that out of 390 variables, 330 have atleast one missing value. Row wise checks confirmed that all of the observations are complete & only a small no of rows contains 1 to 3 missing values. These missing values are scattered across many features and are not concentrated in specific row or columns and no patterns was found. The overall missing rate is extremely low (0.016), so no variable will be removed and missing values will be handled later using median imputation.
+
+
+
+
+
+STEP3: NUMERIC FEATURES FOR OUTLIERS
+To detect potential outliers in a high dimensional dataset, we use a scalable approach to examine each numeric feature’s value using range (max–min). Extremely large ranges often indicate potential outliers or unusually spread distributions. This method provides a quick, global view of features that may contain extreme values.
+```{r}
+
+ranges = df %>% # Computing max and min range
+  select(where(is.numeric)) %>%
+  pivot_longer(everything(), names_to = "feature", values_to = "value") %>%
+  reframe(min = min(value, na.rm = TRUE), max = max(value, na.rm = TRUE), range = max - min,
+          .by = feature)
+
+print(ranges) #printing max and min range
+
+ranges %>% # Plotting range values 
+  arrange(desc(range)) %>%
+  ggplot(aes(x = reorder(feature, range), y = range)) + geom_col() + coord_flip() +
+  labs( title = "Value Range (Max/Min)", x = "Feature", y = "Range") +
+  theme_minimal()
+
+```
+Most of the 387 numeric variables fell within expected ranges such as Entropy and MolWeight. But some variables like Info_pos have large range values which reflect structural dataset properties rather than true outliers because these large values arise from feature engineering rather than measurement noise and they should not be treated as outliers. Overall the analysis showed that there are no severe outliers present but there is a large disparity between scales.
+
+
+
+
+STEP4: CORRELATION ANALYSIS
+Correlation analysis helps identify redundant features and reveals the relationship between numeric variables. This is useful in analysing high-dimensional datasets as they can affect model stability and for that we can use dimensionality-reduction techniques.
+```{r}
+numeric_df = df %>% select(where(is.numeric)) #Selecting only numeric features
+
+cor_matrix = cor(numeric_df, use = "pairwise.complete.obs")
+# Computing correlation matrix
+
+cor_values = cor_matrix[upper.tri(cor_matrix)]
+summary(cor_values) # Summarising distribution of correlations
+
+#Plotting hthe distribution of feature correlations
+ggplot(data.frame(cor = cor_values), aes(cor)) +
+  geom_histogram(bins = 30, fill = "grey", color = "black") +
+  theme_minimal() +
+  labs(title = "Distribution of Feature Correlations", x = "Correlation",
+    y = "Frequency")
+
+```
+The correlation summary shows that most feature pairs have correlations very close to zero, with a median near –0.005. This indicates that most numeric variables are weakly related and largely independent. However, a few pairs show correlations of +1 or –1, suggesting some duplicated or engineered features which justifies dimensionality reduction in the modelling stage.
+
+
+
+
+STEP 5: SCALING OF NUMERIC VALUES
+Using range (max/ min) for each numeric feature we can get a compact and scalable way to compare variable scales. Plotting these ranges allows us to visually detect features that operate on significantly different scales.
+```{r}
+range_df = df %>%
+  select(where(is.numeric)) %>% #Selecting numeric columns from the dataset
+  
+  summarise(across(everything(),~ max(.x, na.rm = TRUE) - min(.x, na.rm = TRUE))) %>%
+  #Crating a single-row dataframe where each column represents the range of each feature
+  
+  pivot_longer(everything(), names_to = "feature", values_to = "range")
+  #Converting single-row format into a long format with 2 columns
+
+print(range_df) #printing the range of numeric values
+
+#Creating a scatter plot where each point represents one numeric feature
+ggplot(range_df, aes(feature, range)) + geom_point(alpha = 0.6) + theme_bw()
+
+```
+The results revealed various distinct variations in measurement scale across the dataset. Many amino acid features had small ranges close to 1, molweight–based features were around 1,000 to 1,500 & (Info_pos) showed extremely large ranges exceeding 7,000. There is a substantial scale imbalance across the dataset & it tells us that standtisation will be required during preprocessing to ensure that large-range features do not influence model training.
+
+
+
+SUMMARY:
+Overall, Exploratory data analysis revealed that the dataset is high dimensional with 12338 observations of 390 variables which are mostly engineered biochemical descriptors. The target class is mildly imbalance with the negative class being slightly more frequent. Missing values are sparse, scattered across many features, and not concentrated in specific observations or variable and no patterns of concentrated missing data was found making them address through simple imputation. Outliers were assessed using min–max comparisons suggesting that outliers are not a major concern. Correlation analysis shows that most features are weakly related, but a few are perfectly correlated, suggesting some redundancy and the scale check revealed that some variables have very small ranges close to 1, while others have several thousand or more. Based on these findings, we can say that preprocessing should include handling the small number of missing values, applying feature scaling, and addressing class imbalance, with optional dimensionality reduction considered during modelling.
+
+:::
+
+*****
+
+## 2. Data preprocessing and feature engineering
+
+:::{#prompt .message style="color: blue;"}
+**Note**: It is expected that this section should result in no more than 400-ish words (possibly less; not counting the code blocks). 
+
+Add here your data pre-processing and feature selection/engineering steps. Your solution should include both your code (which markers must be able to run independently) and your rationale. In general, your steps should include:
+
+- A short justification of which insight from your EDA is motivating a given data transformation.
+
+- A code block implementing your pre-processing step.
+
+**In addition** to the regular data transformations emerging from the insights you gathered during EDA, this section must contain the  splitting off of a test set that you'll use later for final performance assessment  (check the CW specs for details).
+
+At the end of this section you should also include a short commentary on what changes the pre-processing has induced in your data (i.e., what did the data "look like" before this step vs. what it "looks like" afterwards.
+
+You can use as many code blocks as needed, but don't overdo it (remember - everything needs to have a proper rationale). If you compare different pre-processing options, make sure to make it clear, and to indicate at the end which option you selected, and why. 
+
+**Note**: In this section you'll be basically defining which data transformations you will later incorporate into your predictive pipeline. When you build the pipeline in the next section, you'll encapsulate all those steps (together with the model) into a single object that you can fit and deploy as a single unit.
+
+
+
+STEP 1: SPLITTING DATA INTO TRAIN & TEST SETS
+We need to preserve an untouched test set to provide an unbiased final evaluation before pre processing. Since samples of (Info_group) are related, a grouped split was used to prevent data leakage across sets & it prevents related samples from appearing in both training and test sets. Stratification was not suitable because each group contains both class labels.
+```{r}
+
+set.seed(2696783)
+split_obj = group_initial_split(df, prop = 0.80,group = Info_group) # 80% for training, 20% for testing
+
+train_df = training(split_obj) #training dataset
+test_df  = testing(split_obj) #testing dataset
+
+dim(train_df)
+dim(test_df) #Checking dimensions of the datasets
+
+head (test_df) #Printing Datasets
+head(train_df)
+```
+After spiltting, a test set is isolated by using 80:20 split ensuring all preprocessing steps are learned strictly from the training set and avoid data leakage. 
+
+
+
+STEP2: HANDLING MISSING VALUES
+EDA showed that missing data is extremely low, scattered across dataset and without any pattern, so simple median imputation is appropriate as it avoids dropping data while remaining robust to slight skewness in some biochemical descriptors.
+
+```{r}
+
+rec = recipe(Class ~ ., data = train_df) #Creating a recipe 
+                                         #Class is the output we are predicting
+                                         #Taking data for training dataset
+
+rec = rec %>% step_impute_median(all_numeric_predictors()) #Median imputation
+ 
+print(rec)
+```
+The medians were learned only from the training set to prevent data leakage, and the same rules will later be applied to the test set through the recipe.
+
+
+STEP 3: OUTLIERS HANDLING
+EDA revealed some wide min–max ranges, but extreme values were rare and consistent with natural variation in biochemical descriptors. These values did not indicate errors, so outlier treatment (e.g.winsorisation) risked removing meaningful information. Since standardisation later reduces the influence of large values while keeping the data intact, no separate outlier handling step was applied.
+Alternatively, PCA or correlation-based feature filtering could be used to reduce redundant features,but these techniques will not be used until the modeling stage in order to provide a fair assessment of model performance.
+
+STEP4: SCALING OF THE DATASET
+EDA showed that there is a major scale imbalance and it would cause distortions and slow down optimisation and ultimatly can reduce model performance.To ensure all predictors contribute equally for training of the data, all numeric features were standardised using step_normalize(), which centres each variable at zero and scales it to unit variance.
+```{r}
+
+rec = recipe(Class ~ ., data = train_df) %>% #defining recipe
+  
+step_impute_median(all_numeric_predictors()) %>% #median imputation
+  
+step_normalize(all_numeric_predictors()) #scaling step, which standardizes numerical features.
+
+rec #printing the results
+```
+ The scaling parameters were learned from the training dataset to prevent data leakage.
+ 
+
+FINALISING PREPROCESSING
+```{r}
+#Preparing recipe
+prep_rec = prep(rec)
+
+#For traning data
+train_processed = bake(prep_rec, new_data = train_df)
+#For testing data
+test_processed = bake(prep_rec, new_data = test_df)
+#printing the process data 
+print(train_processed)
+ print(test_processed)
+```
+SUMMARY:
+The preprocessing pipeline produced a clean, standardised dataset ready for modelling.The grouped split ensured no leakage between training and test sets. After baking the recipe, the processed training set contained 10,220 rows and 390 variables, while the isolated test set contained 2,118 rows with the same structure. This confirms that all preprocessing steps were applied consistently and without loss of data.
+:::
+*****
+
+## 3. Modelling
+
+:::{#prompt .message style="color: blue;"}
+**Note**: It is expected that this section should result in no more than 400-ish words (possibly less; not counting the code blocks).
+
+Add here your modelling steps. Your solution should include both your code (which markers must be able to run independently) and your rationale. This section must include:
+
+- The fitting of a preliminary model on your preprocessed training data (to estimate some baseline performance level and to make sure your data is ready for modelling). Make this a simple model - logistic regression, decision trees or kNN are good options (but other may be used instead, if you prefer).
+
+- The building of a predictive pipeline encapsulating all the learned/learnable aspects of your solution. This should result in a pipeline-type object that uses your raw training data (post EDA and test set splitting, but prior to any preprocessing), fits all your preprocessing transformations (incl. dimensionality reduction) and the predictive model using that data, and can then be used to ingest your test data (or any new data in the same format) and generate predictions for each entry. 
+
+Please refer to the CW specs for other requirements of this step (including, e.g., the addition of a dimensionality reduction step into your pipeline).
+
+You can use as many code blocks as needed, but don't overdo it (remember - everything needs to have a proper rationale). If you compare different models, make sure to make it clear, and to indicate at the end which pipeline option is your final selected one.
+:::
+
+STEP1: FIT A PRELIMINARY PREDICTIVE MODEL
+A simple model is first trained to ensure the preprocessed data is suitable for modelling and to obtain a baseline level of performance. A decision tree is used because it is fast to train and can highlight whether meaningful structure exists in the data.
+```{r}
+#Creating a recipe to predict Class using all other columns
+base_recipe = recipe(Class ~ ., data = train_processed) %>%
+  step_normalize(all_numeric_predictors()) #Normalising all numeric predictors
+
+#We define the simple model using a basic decison tree
+base_model = decision_tree() %>%
+  set_engine("rpart") %>%
+  set_mode("classification")
+
+base_fit = workflow() %>% #Combinig recipe and model into one workflow
+  add_recipe(base_recipe) %>%
+  add_model(base_model) %>%
+  fit(data = train_processed)
+
+base_fit #printing results
+```
+A recipe containing only feature normalisation was used, and the model fitted successfully without errors. The generated tree structure confirms that the modeling process learned to identify significant splits in the input data set. As such, we will use the generated tree as a baseline for comparison with higher-order models throughout the entire predictive modeling process.
+
+
+STEP 2: PIPELINE STRUCTURE
+To ensure a clean and reproducible modelling process, all preprocessing transformations were encapsulated using a tidymodels workflow.A workflow combines a recipe (preprocessing steps) and a model into a single object, ensuring that every transformation is consistently applied during training, cross validation and only on testing data set.
+```{r}
+# Full recipe created on RAW training data
+full_recipe = recipe(Class ~ ., data = train_df) %>%
+  step_impute_median(all_numeric_predictors()) %>%     # handle missing values using median impuations
+  step_normalize(all_numeric_predictors())             # normalising values
+  
+
+full_model = decision_tree() %>% # Simple base model 
+  set_engine("rpart") %>%
+  set_mode("classification")
+
+pipeline_wf = workflow() %>% # Workflow combining preprocessing + model
+  add_recipe(full_recipe) %>%
+  add_model(full_model)
+
+# Printing to verify structure
+pipeline_wf
+```
+The recipe performs median imputation and normalisation.The decision tree serves as a simple base model to confirm that the pipeline runs correctly.This structure prevents data leakage, guarantees reproducibility, and provides a clean foundation for later adding dimensionality reduction and more advanced models.
+
+
+STEP 3: ADDING DIMENSION REDUCTION
+For adding dimensional reduction, PCA is the best method as reduces this into fewer components that still capture most of the variance.Because the dataset contains over 380 numeric predictors as it improve model efficiency. PCA was therefore added after imputation and scaling, ensuring that components are computed from a standardised feature space.
+```{r}
+#creating PCA recipe
+pca_recipe = recipe(Class ~ ., data = train_df) %>%
+  step_impute_median(all_numeric_predictors()) %>%   # handle missing values
+  step_normalize(all_numeric_predictors()) %>%       # scale features
+  step_pca(all_numeric_predictors(), num_comp = 25)  # reduce to 25 PCA components
+
+tree_model = decision_tree() %>%
+  set_engine("rpart") %>%
+  set_mode("classification")
+pca_wf = workflow() %>%
+  add_recipe(pca_recipe) %>%    # add preprocessing and PCA
+  add_model(tree_model)        # add model
+
+pca_fit = pca_wf %>% fit(train_df)
+print(pca_fit)
+```
+As the data set contains over 380 numeric predictors, dimensional reduction was required for it. Retaining 25 principal components preserves most of the variance while reducing dimensionality. PCA is fully encapsulated inside the workflow, ensuring it is fitted only on the training data.
+
+
+
+STEP 4: DEALING WITH CLASS IMBALANCE
+Although the class imbalance is moderate, upsampling was included to prevent the model from favouring the major class during training. Up sampling occurs after imputation and scaling but before PCA as it allows the dimensional reduction step to capture patterns from both classes equally.
+```{r}
+#DIMENSIONAL REDUCTION
+pca_balanced_recipe = recipe(Class ~ ., data = train_df) %>%
+  
+  step_impute_median(all_numeric_predictors()) %>%   # missing values
+  step_normalize(all_numeric_predictors()) %>%       # scaling
+  step_upsample(Class) %>%                           # handling imbalance
+  step_pca(all_numeric_predictors(), num_comp = 25)  # dimensionality reduction
+
+print(pca_balanced_recipe) #printing the results
+```
+The recipe now includes median imputation, normalization, class balancing  and PCA, fully encapsulated within the workflow pipeline. Embedding this step inside the recipe ensures that resampling is performed only on the training data, without leaking information into the test set.
+
+
+
+STEP 5: TESTING TWO DIFFERENT MODELS
+THE simple baseline model was replaced with more sophisticated models to improve predictive performance. Two advanced models were tested: 
+A Random Forest, using the ranger engine and a Decision Tree, using the rpart engine.
+
+```{r}
+#DEFINING MODELS
+#MODEL 1: random forest
+forest_model = rand_forest(mtry = 25, trees = 300, min_n = 5) %>%
+  set_engine("ranger") %>% 
+  set_mode("classification")
+
+#model 2: Decision tree
+tree_model = decision_tree(cost_complexity = 0.01,tree_depth = 10,min_n = 10) %>%
+  set_engine("rpart") %>%
+  set_mode("classification")
+
+# WORKFLOW OF THE MODELS
+forest_wf = workflow() %>%
+  add_recipe(pca_balanced_recipe) %>%   #final recipe
+  add_model(forest_model)
+
+tree_wf = workflow() %>%
+  add_recipe(pca_balanced_recipe) %>% #final recipe
+  add_model(tree_model)
+
+# Fitting models 
+rf_fit = forest_wf %>% fit(data = train_df)
+tree_fit = tree_wf %>% fit(data = train_df)
+```
+Both models were integrated into the full workflow having all preprocessing steps and was fitted to the raw training data through the workflow system successfully.
+Among these, Random Forest was selected as the primary advanced model as it handles large numbers of predictors more effectively and provides superior performance in high dimensional data, due to its nature and robustness to noise and overfit.
+
+
+
+STEP 6: CROSS VALIDATION & F1 SCORE
+To obtain a reliable estimate of predictive performance, a grouped 3 fold cross-validation procedure was used. Grouping ensured that observations belonging to the same Info_group were kept together in the same fold, preventing data leakage and model performance was assessed using the F1 score.
+```{r}
+set.seed(2696783) 
+cv_folds = group_vfold_cv(train_df,group = Info_group,v = 3) 
+#create grouped cross validation fold, with v= 3
+
+f1_metric = metric_set(f_meas) #create F1 metrics
+
+rf_wf = workflow() %>% #building workflow with random forest model
+  add_recipe(pca_balanced_recipe) %>%
+  add_model(forest_model)
+
+rf_res = rf_wf %>%
+  fit_resamples(resamples = cv_folds,metrics = f1_metric,control = control_resamples(save_pred = TRUE)) # Rerunning the complete workflow inside the folds
+
+rf_results = rf_res %>% collect_metrics() #Mean F1 score
+rf_results #printing F1 score
+```
+One fold produced an undefined precision warning due to the absence of predicted positive cases, but the remaining folds produced valid estimates. The Random Forest model achieved an average F1 score of 0.76,indicating strong classification performance.
+
+
+STEP 7: HYPERPARAMETER TUNING STRATEGY
+To improve the predictive performance of the Random Forest pipeline, two key hyperparameters were tuned. These parameters control model flexibility and help balance overfitting and underfitting.
+mtry – the number of predictors considered at each split
+min_n – the minimum number of observations required to attempt a split
+
+A 3 fold cross validation procedure was applied to ensure stable and unbiased performance estimation and a random search tuning strategy was used, sampling 6 combinations from the defined ranges.
+
+```{r}
+ #Final recipe (with scaling + PCA + upsampling)
+final_recipe = pca_balanced_recipe
+
+#  Random forest model with tunable parameters
+rf_model = rand_forest(mtry  = tune(),min_n = tune(),trees = 200) %>%
+  set_engine("ranger") %>%
+  set_mode("classification")
+
+#  Workflow that actually contains the tunable model
+rf_wf = workflow() %>%
+  add_recipe(final_recipe) %>%
+  add_model(rf_model)
+
+#  3 fold cross validation
+cv_folds = vfold_cv(train_df, v = 3)
+
+#  Random search grid sampling 8 combinations from the defined ranges (mtry 5–30, min_n 2–20)
+set.seed(2696783)
+rf_grid = grid_random(mtry(range = c(5, 30)),min_n(range = c(2, 20)),size = 6)
+
+#  Tuning
+rf_tuned = tune_grid(rf_wf,resamples = cv_folds,grid = rf_grid,metrics = metric_set(f_meas),control = control_grid(save_pred = FALSE, verbose = TRUE))
+
+# Getting best parameters
+show_best(rf_tuned, metric = "f_meas")
+best_params = select_best(rf_tuned, metric = "f_meas")
+best_params
+```
+The F1 score was used as the optimisation metric because the classification task exhibits class imbalance, and F1 balances precision and recall. The tuning process successfully identified the best parameter set, which will later be used in the final pipeline fitting.
+
+
+*****
+
+## 4. Model assessment
+
+:::{#prompt .message style="color: blue;"}
+**Note**: It is expected that this section should result in no more than 100-ish words (possibly less; not counting the code blocks).
+
+This is a short section in which you must estimate the generalisation performance of your model on the test set that you isolated at the start of your Data preprocessing step. It is also a chance for you to ensure that your pipeline object can take in new data and return the required predictions.
+
+Use your pipeline to generate predictions for your test set, and calculate the observed performance using the $F_1$-score as your main performance indicator. You can also additionally report other performance metrics if you think it's relevant.
+
+You can use as many code blocks as needed, but it's likely that this section can be completed with a single one. Make sure that your performance indicators are clearly echoed, so that a reader can easily check if after re-running your script. Add a short comment on the observed performance (is it good? Is it poor? Remember that you're not being assessed on the performance of your models, but on the soundness of your approach).
+
+```{r}
+
+best_parameter = select_best(rf_tuned, metric = "f_meas") #Selecting best parameters
+
+final_wf = finalize_workflow(forest_wf, best_parameter) #Finalising workflow with tuned parameters
+
+final_fit = final_wf %>%
+  fit(data = train_df) # Fit the final pipeline on full training data
+
+test_predictions = predict(final_fit, test_df) #Generating predictions for untouched test set
+
+test_f1 = f_meas_vec(truth = test_df$Class, #Computing final F1 score on unseen data
+                      estimate = test_predictions$.pred_class)
+
+test_f1 #Output the score
+
+```
+In final test set evaulation, we applied our fine tuned pipeline to the test dataset we spilt in Data preprocessing. The pipleline processed this dataset without any warnings and errors.The final F1 score obtained indicates that the model has strong predictive performance on previously unseen data. It also reflects that there is a balanced ability of both precision and recall, showing that the modelling approach is sound and robust.
+Also, this score is similar to the cross validated F1 obtained during training, the model appears stable and does not show signs of overfitting and is a well balanced model.
+:::
+
+*****
+
+## 5. Model deployment
+
+:::{#prompt .message style="color: blue;"}
+**Note**: This section is not expected to have much text in it, only the code and the results.
+
+Finally, in this section you'll generate predictions for some data for which you do not know the class labels. This simulates the real-life scenario in which your model needs to be deployed to generate new predictions for new, unknown data (after all, if the labels were known, we wouldn't need a model).
+
+Make sure that the data file __df_holdout.rds__ is placed in the same folder as this Task02.Rmd file. The new data will then be automatically loaded and set up for you, and stored into a dataframe variable called `df_holdout`, with the same columns as the original `df` that was loaded at the start of this task.
+
+- Use your fitted pipeline to generate predictions for this new data.
+
+- Build a new data frame called containing the following columns:
+    - `Info_PepID` (taken from df_holdout)
+    - `Info_pos`  (taken from df_holdout)
+    - `Predicted_class` (with the predictions produced by your pipeline)
+
+- Save your predictions dataframe to a file called __mypreds.rds__. You will be able to submit this file, and it will be used to give you some feedback on the actual performance of your pipeline on new data.
+:::
+
+```{r load_holdout, echo = FALSE}
+## DO NOT CHANGE ANYTHING IN THIS CODE BLOCK
+df_holdout <- readRDS("df_holdout.rds")
+```
+
+```{r}
+#Model Deployment
+
+holdout_prediction = predict(final_fit, df_holdout) #Generating predictions for holdout dataset
+
+mypreds = df_holdout %>%
+  select(Info_PepID, Info_pos) %>%
+  mutate(Predicted_class = holdout_prediction$.pred_class) #Required output dataframe
+
+saveRDS(mypreds, file = "mypreds.rds") # Saving predictions to file
+
+head(mypreds) #display preview
+
+```
+*****
+*****
+
+### =========== End of Task II ===========
